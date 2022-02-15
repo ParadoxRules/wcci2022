@@ -33,64 +33,56 @@ def permutation(n):
   rand.shuffle(x)
   return x
 
-############### MUTATION FUNCTIONS ################
-# Flip a bit
+# Flips the kth bit of a genome (creates a new genome)
 def flip(x, k):
   y = x.copy()
   y[k] = 1 if y[k]==0 else 0
   return y
 
-# Flip multiple bits
-def multi_flip(x, indices):
-  y = x.copy()
-  for k in indices:
-    y[k] = 1 if y[k]==0 else 0
-  return y
+# Generates the complement bitstring (creates a new genome)
+def complement(x): return [1-v for v in x]
 
-# Single bit mutation
+# For all logic operator tested on an array of boolean values
+def for_all(a):
+  for v in a:
+    if(not v):
+      return False
+  return True
+
+############### MUTATION FUNCTIONS ################
+
+# Single bit mutation (creates a copy with a bit randomly flipped)
 def single_bit_mutation(x):
   return flip(x, rand.randint(0,len(x)-1))
 
-# Bit mutation
-def bit_mutation(x):
-  y = x.copy()
-  D = len(x)
-  p = 1/D
-  c = 0
-  while(c==0):
-    for k in range(D):
-      if(randbool(p)): 
-        y[k] = 1 if y[k]==0 else 0
-        c += 1
-  return y
 
 ####################### Global variables ########################
 TRACE = True # Tracing f value evolution
 PRINT = True # Printing intermediate information
 
-best = [] # f value of the best candidate solution at each iteration
-best_x = None # Best candidate solution found
-best_f = None # f value of the best candidate solution 
-iter = 0 # Curren iteration (number of f evaluations)
+generated = [] # f value of each generated candidate solution at each iteration
+best = [] # f value of the best generated candidate solution at each iteration
+iter = 0 # Expended function evaluations
 
 # Initializes global variables
 def init():
-  global best, best_x, best_f, iter
+  global generated, best, iter
   best = []
-  best_x = None
-  best_f = None
+  generated = []
   iter = 0
 
-# Evaluates the fitness function. Stores information in the generated and values 
+# Evaluates the function on a given genome and stores information in the 
 # global variables for further analysis if required
 def evaluate(f, x):
-  global best_f, best_x, iter, TRACE
+  global generated, best, iter, TRACE
   fx = f(x)
+  if( TRACE ): 
+    generated.append(fx)
+    if(iter==0 or fx>best[iter-1]):
+      best.append(fx)
+    else:
+      best.append(best[iter-1])  
   iter += 1  
-  if(iter==1 or fx>=best_f): 
-      best_x = x
-      best_f = fx
-  if( TRACE ): best.append(best_f) # Tracing evolution information or not
   return fx
 
 #################### LITERATURE ALGORITHMS #####################
@@ -115,7 +107,7 @@ def HC( f, mutation, evals, x, fx=None):
     y = mutation(x)
     fy = evaluate(f,y)
     x, y, fx, fy = pick( x, y, fx, fy )
-  return x
+  return x, fx
 
 # The HC algorithm suggested by Richard Palmer [15], that Forrest and
 # Mitchell termed "random mutation hill-climbing" (RMHC)
@@ -129,178 +121,87 @@ def RMHC( f, evals, x, fx=None): return HC(f, single_bit_mutation, evals, x, fx 
 # Tries only order 1-schemas
 # f: Function to be optimized
 # evals: Maximum number of fitness evaluations
-# x: Initial point
-# fx: f value at point x
-def GS1( f, evals, x, fx=None ):
+# x: Initial point, a random point. It is required for defining the dimension of the space 
+def GS1( f, evals, x ):
   global iter
   D = len(x) # Space dimension
-  if(not fx): fx = evaluate(f, x)
+  fx = evaluate(f, x)
   S1 = [x]
   fS1 = [fx]
-  for i in range(iter, evals-1):
+  for i in range(evals-2):
     x = bitstring(D)
     fx = evaluate(f,x)
     S1.append(x)
     fS1.append(fx)
-  
+  # Computes schemata information
   M = len(S1)
   C = [[0 for k in range(D)], [0 for k in range(D)]]
   fH = [[0 for k in range(D)], [0 for k in range(D)]]
-  y = []
   for k in range(D):
     for i in range(M):
       fH[S1[i][k]][k] += fS1[i]
       C[S1[i][k]][k] += 1
+  # Generates a candidate solution with the best genes
+  y = []
+  for k in range(D):
     y.append( 1 if(fH[1][k]/C[1][k] > fH[0][k]/C[0][k]) else 0 ) 
-  return y, evaluate(f,y)
+  return y, evaluate(f,y), S1, fS1
 
 # The Global Search Algorithm with complement propossed by G. Venturini 1995
 # Applies GS1 and compares the obtained solution with its complement and the 
 # best candidate solution of the S1 set (same as the best solution found)
 # f: Function to be optimized
 # evals: Maximum number of fitness evaluations
-# x: Initial point
-# fx: f value at point x
-def GSC1( f, evals, x, fx=None ):
-  global best_x, best_f
-  x, fx = GS1(f, evals-1, x, fx)
-  xc = [1-x[k] for k in range(len(x))]
+# x: Initial point, a random point. It is required for defining the dimension of the space 
+def GSC1( f, evals, x ):
+  x, fx, S1, fS1 = GS1(f, evals-1, x)
+  xc = complement(x)
   fxc = evaluate(f,xc)
-  return best_x, best_f
+  x, xc, fx, fxc = pick(x, xc, fx, fxc)
+  for i in range(len(S1)):
+    x, y, fx, fy = pick(x, S1[i], fx, fS1[i])
+  return x, fx
 
-############ HILL CLIMBING ALGORITHM WITH LOCUS ANALYSIS #############
+############ GABO: Gene Analysis Bitstring Optimization #############
 # Gene information
-class Gene:
-  # locus: Index of the gene (locus) 
-  # delta: Contribution of the gene to the f value change when the gene takes the 1 value
-  # separable: Indicates if the gene looks like separable form the rest of the genome
-  # intron: Indicates if the gene has not produced any contribution to the f value (all contributions are zero)
-  def __init__(self, locus):
-    self.locus = locus
-    self.delta = []
-    self.separable = True
-    self.intron = True
-  
-  # Computes contribution information (relative to a value 1), i.e., some change 
-  # in the f value
-  # x: A candidate solution
-  # y: The candidate solution with the k-th bit flipped 
-  # fx: f value of x
-  # fy: f value of y
-  def contribution(self, x, y, fx, fy):
-    d = fx-fy
-    self.intron = self.intron and d==0
-    if(x[self.locus]==1): self.delta.append(d)
-    else: self.delta.append(-d)
-    return d
+contribution = []
+intron = []
+separable = []
 
-  # Computes gene contribution on a genome and its complement (consider k=3, starting at 0)
-  # x: Current candidate solution (for example, x=10010110)
-  # y: Current candidate solution with the gene flipped (for the example, y=10000110)
-  # xc: Complement of the current candidate solution (for the example, xc=01101001)
-  # yc: Complement of the current candidate solution with the gene flipped (for the example, yc=01111001)
-  # fx: f value of x
-  # fy: f value of y
-  # fxc: f value of xc
-  # fyc: f value of yc
-  # Returns the candidate solutions according to f value and a flag indicating if there
-  # was some change in the contribution of the locus 
-  def update(self, x, y, xc, yc, fx, fy, fxc, fyc):
-    d1 = self.contribution(x, y, fx, fy)
-    d2 = self.contribution(yc, xc, fyc, fxc)
-    self.separable = self.separable and d1==d2
+# initializes global variables
+def init_gene(D):
+  global contribution, intron, separable
+  contribution = [[] for i in range(D)]
+  intron = [True for i in range(D)]
+  separable = [True for i in range(D)]
 
-    x, xc, fx, fxc = pick( x, xc, fx, fxc )
-    w = x
-    y, yc, fy, fyc = pick( y, yc, fy, fyc )
-    x, y, fx, fy = pick( x, y, fx, fy )
-    if(w!=x): xc, yc, fxc, fyc = yc, xc, fyc, fxc
-    return x, y, xc, yc, fx, fy, fxc, fyc
-
-  # Checks the gene's contribution information to determine if the best bit value (allele)
-  # for the gene is 0: d<0, or 1: d>0. If d=0 then a gene behaves like an intron (neutral) so 
-  # bit is set to None. Returns a non-negative contribution (d) accordingly
-  def check(self, d):
-    bit = None
-    if(d>0):
-      bit = 1
-    elif(d<0):
-      bit = 0
-      d = -d
-    return bit, d
-
-  # Checks all the information about the gene's contribution to get the higher one,
-  # determines the best allele (0, 1, or None) for the gene  and the first time (in checking trials) it was reached
-  def best(self):
-    b, d = self.check(self.delta[0])
-    i = 0
-    for k in range(1,len(self.delta)):
-      bn, dn = self.check(self.delta[k])
-      if(dn > d): b, d, i = bn, dn, k
-    return b, d, i
-
-  # Computes contribution information of flipping the gene, and all
-  # the other genes and determines if there is some change in the contribution
-  # value of the gene to the f value. If so there is some relation with some or
-  # all the other genes, otherwise there is not relation or ot is hard to determine
-  # (it is hard when flipping the gene produces a zero contribution in the f value)
-  # f: Function being optimized
-  # x: Current candidate solution
-  # xc: The 'complement' of the current solution (all components flipped)
-  # fx: f value of x
-  # fxc: f value of xc
-  # Returns the candidate solution and its complement according to f value 
-  def analyze(self, f, x, xc, fx, fxc):
-    D = len(x)
-    y = flip(x,self.locus)
-    fy = evaluate(f,y)
-    yc = flip(xc,self.locus)
-    fyc = evaluate(f,yc)    
-    x, y, xc, yc, fx, fy, fxc, fyc = self.update(x, y, xc, yc, fx, fy, fxc, fyc)
-    return x, xc, fx, fxc    
-
-########## GABO: Gene Analysis Based Optimization Algorithm ###########
-def fully_separable(genome):
-  for gene in genome:
-    if(not gene.separable):
-      return False
-  return True
-
-def fully_introns(genome):
-  for gene in genome:
-    if(not gene.intron):
-      return False
-  return True
-
-# Creates a candidate solution using locus contributions.
-# For each locust gets the value of the bit (0, or 1) with the higher contribution
-# that is stored in the delta list
-# genome: An array with each gene information, see Gene class
-# returns the best candidate solution so far and its f value
-def succesful_trial(genome):
-  D = len(genome)
-  succesful = False # If additional SCA trial must carried on
-  k = 0
-  while( k<D and not succesful ): 
-    b, d, i = genome[k].best()
-    if(d != 0): succesful = (i+2 >= len(genome[k].delta))
-    k += 1
-  return succesful
+# Computes contribution information (relative to a value 1), i.e., some change 
+# in the f value
+# x: A candidate solution
+# y: The candidate solution with the k-th bit flipped 
+# fx: f value of x
+# fy: f value of y
+# k: Gene's locus
+def C(x, y, fx, fy, k):
+  global intron, contribution
+  c = fx-fy
+  intron[k] = intron[k] and c==0
+  if(x[k]==0): c = -c 
+  contribution[k].append(c)
+  return c
 
 # Gene characterization algorithm
 # genome: An array with each gene information, see Gene class
 # f: Function to be optimized
 # x: initial point
 # evals: Maximum number of fitness evaluations
-# fx: f value in the x point
-def GCA( genome, f, evals, x=None ):
-  global iter
-  D = len(genome) # Space dimension
-  if( not x ): x = bitstring(D)
-  fx = evaluate(f, x)
+def GCA( f, evals, x ):
+  global iter, PRINT, separable
+  D = len(x) # Space dimension
+  fx = evaluate(f, x) if iter<evals else None
   if( iter<evals ):
     # The complement candidate solution (used for determining locus separability)
-    xc = [1-x[k] for k in range(D)]
+    xc = complement(x)
     fxc = evaluate(f,xc)
     x, xc, fx, fxc = pick(x, xc, fx, fxc)
 
@@ -309,36 +210,81 @@ def GCA( genome, f, evals, x=None ):
   a=0
   while(iter+2<=evals and a<D):
     k = perm[a]
-    x, xc, fx, fxc = genome[k].analyze(f, x, xc, fx, fxc)
+    y = flip(x,k)
+    fy = evaluate(f,y)
+    yc = complement(y)
+    fyc = evaluate(f,yc)    
+    cx = C(x, y, fx, fy, k)
+    cxc = C(xc, yc, fxc, fyc, k)
+    separable[k] = separable[k] and (cx==cxc)
+    w = x
+    y, yc, fy, fyc = pick( y, yc, fy, fyc )
+    x, y, fx, fy = pick( x, y, fx, fy )
+    if(w!=x): xc, fxc = yc, fyc
     a += 1
-
+  if(PRINT): print('Best GCA trial:', fx, x)
   return x, fx
+
+# Checks the gene's contribution information to determine if the best bit value (allele)
+# for the gene is 0: c<0, or 1: c>0. If c=0 then a gene behaves like an intron (neutral) so 
+# bit is set to a random value. Returns a non-negative contribution (c) accordingly
+def allele(c):
+  if(c>0): return 1,c
+  if(c<0): return 0,-c
+  bit = 0 if randbool() else 1
+  return bit, c
+
+# Checks all the information about the gene's contribution to get the higher one,
+# determines the best allele (0, 1, or None) for the gene  and the first time (in checking trials) it was reached
+def best_allele(k):
+  global contribution
+  alle, cont = allele(contribution[k][0])
+  trial = 0
+  for i in range(1,len(contribution[k])):
+    a, c = allele(contribution[k][i])
+    if(c > cont): alle, cont, trial = a, c, i
+  return alle, cont, trial
+
+# Creates a candidate solution using locus contributions.
+# For each locust gets the value of the bit (0, or 1) with the higher contribution
+# that is stored in the delta list
+# genome: An array with each gene information, see Gene class
+# returns the best candidate solution so far and its f value
+def success_trial():
+  global contribution
+  D = len(contribution)
+  success = False
+  k = 0
+  while( k<D and not success ): 
+    allele, cont, trial = best_allele(k)
+    if(cont != 0): success = (trial+2 >= len(contribution[k]))
+    k += 1
+  return success
+
 
 # Gene characterization analysis trials
 # genome: An array with each gene information, see Gene class
 # f: Function to be optimized
 # x: initial point
 # evals: Maximum number of fitness evaluations
-def GCSA( genome, f, evals, x ):
-  global iter
+def GCSA( f, evals, x ):
+  global iter, PRINT, separable, intron, contribution
   D = len(x) # Space dimension
 
-  x, fx = GCA(genome, f, evals, x) # Best solution obtained with GCA
+  x, fx = GCA(f, evals, x) # Best solution obtained with GCA
 
-  if(fully_separable(genome) or fully_introns(genome)): return x, fx
+  if(for_all(separable) or for_all(intron)): return x, fx
 
-  failTrials = 0 if new_trial(genome) else 1
+  failTrials = 0 if success_trial() else 1
   while(iter+2<=evals and failTrials<3 ):
-    y, fy = GCA(genome, f, evals) # Best solution obtained with SLA
-    failTrials = 0 if new_trial(genome) else faliTrial + 1
+    y, fy = GCA(f, evals, bitstring(D)) # Best solution obtained with SLA
+    failTrials = 0 if success_trial() else failTrials + 1
     x, y, fx, fy = pick(x,y,fx,fy)
   if(iter<evals):
-    y = bitstring(D)
-    for k in range(D): 
-      b = genome[k].best()[0]
-      if(b != None): y[k] = b
-    fy = evaluate(f,x)
+    y = [best_allele(k)[0] for k in range(D)] 
+    fy = evaluate(f,y)
     x, y, fx, fy = pick(x, y, fx, fy)
+  if(PRINT): print('Best GCA trials:', fx, x)
   return x, fx
 
 
@@ -348,14 +294,14 @@ def GCSA( genome, f, evals, x ):
 # x: initial point
 # evals: Maximum number of fitness evaluations
 # fx: f value in the x point, if available
-def IOSA( genome, f, evals, x, fx=None ):
-  global iter, PRINT
+def IOSA( f, evals, x, fx=None ):
+  global iter, PRINT, intron
   if(not fx): fx = evaluate(f, x) # Evaluates f on x if not done
   D = len(x) # Space dimension
 
   introns = []
   for k in range(D):
-    if(genome[k].intron): introns.append(k)
+    if(intron[k]): introns.append(k)
 
   if(PRINT): 
     print('Introns:', introns)
@@ -369,7 +315,7 @@ def IOSA( genome, f, evals, x, fx=None ):
     fy = evaluate(f,y)
     x, y, fx, fy = pick(x, y, fx, fy)
     # Checks if the locus is not neutral anymore and removes it
-    if( genome[k].contribution(x, y, fx, fy) != 0 ):
+    if( C(x, y, fx, fy, k) != 0 ):
       introns.pop(j)
       N-=1
       if(PRINT): print('(', k, ',', iter, ')', sep='')
@@ -385,12 +331,12 @@ def GABO( f, evals, x ):
   D = len(x) # Space dimension
 
   # Initializes component information
-  genome = [Gene(k) for k in range(D)] 
+  init_gene(D) 
 
-  x, fx = GCSA(genome, f, evals, x) # Best solution obtained with SLA
-  if(PRINT): print('******Best GCA:', iter, fx, x)
+  x, fx = GCSA(f, evals, x) # Best solution obtained with SLA
+  if(PRINT): print('******Best GCSA:', iter, fx, x)
 
-  x, fx = IOSA(genome, f, evals, x, fx) # Best solution for 'introns'
+  x, fx = IOSA(f, evals, x, fx) # Best solution for 'introns'
   if(PRINT): print('******Best IOSA:', iter, fx, x) # Remove this line if printing is not required
 
   return x
@@ -492,6 +438,7 @@ def plot( method, function, fx, DIM=0, EVALS=0, log=False ):
   plt.xlabel( function + ' evaluations')  
   plt.ylabel( function + ' value' )  
 
+  # plt.savefig(PATH+function+'_'+str(DIM)+'_'+str(EVALS)+'.eps') 
   plt.show()
 
 ##################### MAIN #####################
@@ -631,6 +578,7 @@ def binary_gabo_test(function, DIM, EVALS, EXP):
   print_stats( 'GABO', function, DIM, EVALS, stats(hcla_results, opt) )
 
 #main
+PATH = "drive/My Drive/wcci2022/"
 PRINT = False # Set to True if traced information must be printed
 function = ['Max Ones', 'Deceptive3', 'Boundedly', 'Royal Road 8', 'Mixed'] # Function under optimization
 
@@ -655,3 +603,6 @@ def experiment2():
       EVALS =  150*D
       print('%%%%%%%%%%%%%%%',EVALS,'%%%%%%%%%%%%%%')
       binary_gabo_test(function[k], D, EVALS, EXP)
+
+experiment1()
+#binary_gabo_test('Royal Road 8', 480, 60000, 100)
